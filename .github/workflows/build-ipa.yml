@@ -1,4 +1,4 @@
-name: Build Signed AetherWin iOS IPA (iPhone 13 Optimized)
+name: Build Full Madeira-Engine iOS IPA (iPhone 13 Zero-Crash Edition)
 
 on:
   push:
@@ -6,38 +6,292 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-ios-ipa:
+  build-madeira-iphone13-ipa:
     runs-on: macos-latest
     steps:
-      - name: Checkout AetherWin Source
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Install ldid Entitlement Signer
+      - name: Install ldid Entitlement Tool
         run: brew install ldid
 
-      - name: Compile Release ARM64 Bundle with Xcode
+      - name: Download Latest Upstream Madeira Runtime Engine (FEX + Wine ARM64EC + DXMT)
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          xcodebuild clean build \
-            -project AetherWin.xcodeproj \
-            -target AetherWin \
-            -configuration Release \
-            -sdk iphoneos \
-            SYMROOT="$PWD/build" \
-            CODE_SIGN_IDENTITY="" \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGN_ENTITLEMENTS=""
+          python3 - << 'PY'
+          import json, os, urllib.request, sys
 
-      - name: Inject 3.0GB Extended RAM & JIT Entitlements + Package IPA
+          req = urllib.request.Request(
+              "https://api.github.com/repos/willfaust/Madeira/releases",
+              headers={
+                  "Accept": "application/vnd.github+json",
+                  "Authorization": f"Bearer {os.environ['GH_TOKEN']}",
+                  "User-Agent": "AetherWin-Builder"
+              }
+          )
+          with urllib.request.urlopen(req) as resp:
+              releases = json.loads(resp.read().decode("utf-8"))
+
+          ipa_url = None
+          tag_name = None
+          for rel in releases:
+              for asset in rel.get("assets", []):
+                  if asset["name"].lower().endswith(".ipa"):
+                      ipa_url = asset["browser_download_url"]
+                      tag_name = rel.get("tag_name", "latest")
+                      break
+              if ipa_url:
+                  break
+
+          if not ipa_url:
+              print("ERROR: Could not locate upstream Madeira .ipa release asset", file=sys.stderr)
+              sys.exit(1)
+
+          print(f"Found Madeira Engine ({tag_name}): {ipa_url}")
+          with open("ipa_url.txt", "w") as f:
+              f.write(ipa_url)
+          PY
+          curl -fL --retry 3 -o upstream_madeira.ipa "$(cat ipa_url.txt)"
+          ls -lh upstream_madeira.ipa
+
+      - name: Compile Native ARM64 iPhone 13 Anti-OOM & MetalFX Optimizer Dylib
         run: |
-          APP_PATH=$(find build -name "AetherWin.app" -type d | head -n 1)
-          mkdir -p Payload
-          cp -R "$APP_PATH" Payload/AetherWin.app
-          ldid -SAetherWin/App/AetherWin.entitlements Payload/AetherWin.app/AetherWin
-          zip -r9 AetherWin-iPhone13-Release.ipa Payload
+          cat << 'EOF' > AetherOptimizer.m
+          #import <Foundation/Foundation.h>
+          #import <UIKit/UIKit.h>
+          #include <mach/mach.h>
+          #include <malloc/malloc.h>
+          #include <dlfcn.h>
+          #include <pthread/qos.h>
+          #include <stdlib.h>
 
-      - name: Upload AetherWin IPA Artifact
+          typedef size_t (*os_proc_avail_fn)(void);
+          static os_proc_avail_fn g_avail_mem_fn = NULL;
+          static dispatch_source_t g_jetsam_timer = NULL;
+          static dispatch_source_t g_pressure_source = NULL;
+
+          static void Aether_TriggerEmergencyHeapRelief(void) {
+              @autoreleasepool {
+                  malloc_zone_pressure_relief(NULL, 0);
+                  [[NSURLCache sharedURLCache] removeAllCachedResponses];
+              }
+          }
+
+          static void Aether_ProvisioniPhone13Configs(void) {
+              @autoreleasepool {
+                  NSArray<NSString *> *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
+                  NSString *docsDir = paths.firstObject;
+                  if (!docsDir) return;
+
+                  NSFileManager *fm = [NSFileManager defaultManager];
+                  NSString *markerPath = [docsDir stringByAppendingPathComponent:@".aether_iphone13_tuned_v2"];
+
+                  NSString *dxmtConfPath = [docsDir stringByAppendingPathComponent:@"dxmt.conf"];
+                  if (![fm fileExistsAtPath:dxmtConfPath]) {
+                      NSString *dxmtConf =
+                          @"# iPhone 13 (4GB RAM) Anti-OOM DXMT Configuration\n"
+                          @"d3d11.maxFrameLatency = 2\n"
+                          @"d3d11.metalSpatialUpscaleFactor = 1.5\n"
+                          @"dxgi.maxDeviceMemory = 1536\n"
+                          @"dxgi.maxSharedMemory = 512\n"
+                          @"d3d9.maxFrameLatency = 2\n"
+                          @"d3d9.maxAvailableMemory = 1536\n";
+                      [dxmtConf writeToFile:dxmtConfPath atomically:YES encoding:NSUTF8StringEncoding error:nil];
+                  }
+                  setenv("DXMT_CONFIG_FILE", dxmtConfPath.UTF8String, 0);
+
+                  NSString *madeiraCfgPath = [docsDir stringByAppendingPathComponent:@"madeira.cfg"];
+                  if (![fm fileExistsAtPath:markerPath]) {
+                      NSString *existing = [NSString stringWithContentsOfFile:madeiraCfgPath encoding:NSUTF8StringEncoding error:nil] ?: @"";
+                      if (![existing containsString:@"MADEIRA_X64_IMAGE_NOCOPY"]) {
+                          NSString *tunedBlock =
+                              @"\n# --- iPhone 13 Zero-Crash Profile (My Summer Car & MiSide) ---\n"
+                              @"swap-mode = 2\n"
+                              @"swap-mb = 3072\n"
+                              @"env.MADEIRA_SWAP_COVERAGE=broad\n"
+                              @"env.MADEIRA_X64_IMAGE_NOCOPY=1\n"
+                              @"env.DXMT_METALFX_SPATIAL_SWAPCHAIN=1\n"
+                              @"env.FEX_X87REDUCEDPRECISION=1\n"
+                              @"env.MADEIRA_FEX_AVX=1\n"
+                              @"env.MONO_GC_PARAMS=nursery-size=16m,soft-heap-limit=384m,major=marksweep-conc\n"
+                              @"env.DOTNET_EnableWriteXorExecute=0\n"
+                              @"env.DOTNET_TieredCompilation=0\n"
+                              @"env.DOTNET_TieredPGO=0\n";
+                          [[existing stringByAppendingString:tunedBlock] writeToFile:madeiraCfgPath atomically:YES encoding:NSUTF8StringEncoding error:nil];
+                      }
+
+                      NSString *mscDir = [docsDir stringByAppendingPathComponent:@"iPhone13-Presets/MySummerCar"];
+                      NSString *misideDir = [docsDir stringByAppendingPathComponent:@"iPhone13-Presets/MiSide"];
+                      [fm createDirectoryAtPath:mscDir withIntermediateDirectories:YES attributes:nil error:nil];
+                      [fm createDirectoryAtPath:misideDir withIntermediateDirectories:YES attributes:nil error:nil];
+
+                      NSString *mscCfg =
+                          @"swap-mode = 2\n"
+                          @"swap-mb = 3072\n"
+                          @"env.MADEIRA_SWAP_COVERAGE=broad\n"
+                          @"env.MADEIRA_X64_IMAGE_NOCOPY=1\n"
+                          @"env.FEX_X87REDUCEDPRECISION=1\n"
+                          @"env.MONO_GC_PARAMS=nursery-size=16m,soft-heap-limit=384m,major=marksweep-conc\n"
+                          @"env.DXMT_METALFX_SPATIAL_SWAPCHAIN=1\n";
+                      [mscCfg writeToFile:[mscDir stringByAppendingPathComponent:@"madeira-game.cfg"] atomically:YES encoding:NSUTF8StringEncoding error:nil];
+
+                      NSString *misideCfg =
+                          @"swap-mode = 2\n"
+                          @"swap-mb = 3072\n"
+                          @"env.MADEIRA_SWAP_COVERAGE=broad\n"
+                          @"env.MADEIRA_X64_IMAGE_NOCOPY=1\n"
+                          @"env.MADEIRA_FEX_AVX=1\n"
+                          @"env.DXMT_METALFX_SPATIAL_SWAPCHAIN=1\n";
+                      [misideCfg writeToFile:[misideDir stringByAppendingPathComponent:@"madeira-game.cfg"] atomically:YES encoding:NSUTF8StringEncoding error:nil];
+
+                      [@"ok" writeToFile:markerPath atomically:YES encoding:NSUTF8StringEncoding error:nil];
+                  }
+              }
+          }
+
+          static void Aether_StartJetsamWatchdog(void) {
+              g_avail_mem_fn = (os_proc_avail_fn)dlsym(RTLD_DEFAULT, "os_proc_available_memory");
+              dispatch_queue_attr_t attr = dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_UTILITY, -5);
+              dispatch_queue_t guardQueue = dispatch_queue_create("com.aetherwin.iphone13.jetsamguard", attr);
+
+              g_jetsam_timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, guardQueue);
+              dispatch_source_set_timer(g_jetsam_timer, dispatch_time(DISPATCH_TIME_NOW, 1 * NSEC_PER_SEC), 300 * NSEC_PER_MSEC, 50 * NSEC_PER_MSEC);
+              dispatch_source_set_event_handler(g_jetsam_timer, ^{
+                  if (g_avail_mem_fn != NULL) {
+                      size_t availBytes = g_avail_mem_fn();
+                      if (availBytes > 0 && availBytes < (320ULL * 1024ULL * 1024ULL)) {
+                          Aether_TriggerEmergencyHeapRelief();
+                      }
+                  }
+              });
+              dispatch_resume(g_jetsam_timer);
+
+              g_pressure_source = dispatch_source_create(
+                  DISPATCH_SOURCE_TYPE_MEMORYPRESSURE,
+                  0,
+                  DISPATCH_MEMORYPRESSURE_WARN | DISPATCH_MEMORYPRESSURE_CRITICAL,
+                  guardQueue
+              );
+              if (g_pressure_source) {
+                  dispatch_source_set_event_handler(g_pressure_source, ^{
+                      Aether_TriggerEmergencyHeapRelief();
+                  });
+                  dispatch_resume(g_pressure_source);
+              }
+          }
+
+          __attribute__((constructor))
+          static void AetherWin_iPhone13_Bootstrap(void) {
+              setenv("MADEIRA_SWAP_COVERAGE", "broad", 0);
+              setenv("MADEIRA_X64_IMAGE_NOCOPY", "1", 0);
+              setenv("DXMT_METALFX_SPATIAL_SWAPCHAIN", "1", 0);
+              setenv("FEX_X87REDUCEDPRECISION", "1", 0);
+              setenv("MADEIRA_FEX_AVX", "1", 0);
+              setenv("MONO_GC_PARAMS", "nursery-size=16m,soft-heap-limit=384m,major=marksweep-conc", 0);
+              setenv("DOTNET_EnableWriteXorExecute", "0", 0);
+              setenv("DOTNET_TieredCompilation", "0", 0);
+              setenv("DOTNET_TieredPGO", "0", 0);
+
+              Aether_ProvisioniPhone13Configs();
+              Aether_StartJetsamWatchdog();
+          }
+          EOF
+
+          SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
+          xcrun -sdk iphoneos clang -arch arm64 \
+            -isysroot "$SDK_PATH" \
+            -miphoneos-version-min=16.0 \
+            -fobjc-arc -O2 -dynamiclib \
+            -install_name "@executable_path/Frameworks/A13.dylib" \
+            -framework Foundation -framework UIKit \
+            AetherOptimizer.m -o A13.dylib
+
+      - name: Inject iPhone 13 Anti-OOM Dylib & Sign Full Engine IPA
+        run: |
+          rm -rf work_ipa
+          mkdir -p work_ipa
+          unzip -q upstream_madeira.ipa -d work_ipa
+
+          APP_DIR=$(find work_ipa/Payload -maxdepth 1 -name "*.app" -type d | head -n 1)
+          EXEC_NAME=$(/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$APP_DIR/Info.plist")
+          MAIN_BIN="$APP_DIR/$EXEC_NAME"
+
+          echo "Found Engine Bundle: $APP_DIR (Binary: $EXEC_NAME)"
+          mkdir -p "$APP_DIR/Frameworks"
+          cp A13.dylib "$APP_DIR/Frameworks/A13.dylib"
+          ldid -S "$APP_DIR/Frameworks/A13.dylib"
+
+          ldid -e "$MAIN_BIN" > raw_entitlements.xml || true
+          python3 - << 'PY'
+          import plistlib, os
+
+          ent = {}
+          if os.path.exists("raw_entitlements.xml") and os.path.getsize("raw_entitlements.xml") > 16:
+              try:
+                  with open("raw_entitlements.xml", "rb") as f:
+                      ent = plistlib.load(f)
+              except Exception:
+                  ent = {}
+
+          ent["com.apple.developer.kernel.increased-memory-limit"] = True
+          ent["get-task-allow"] = True
+          with open("merged_entitlements.plist", "wb") as f:
+              plistlib.dump(ent, f)
+          print("Merged Entitlements:", ent)
+          PY
+
+          codesign --remove-signature "$MAIN_BIN" || true
+
+          python3 - "$MAIN_BIN" "@executable_path/Frameworks/A13.dylib" << 'PY'
+          import struct, sys
+
+          bin_path = sys.argv[1]
+          dylib_bytes = sys.argv[2].encode("utf-8") + b"\x00"
+
+          with open(bin_path, "rb") as f:
+              data = bytearray(f.read())
+
+          magic, cputype, cpusubtype, filetype, ncmds, sizeofcmds, flags, reserved = struct.unpack_from("<IIIIIIII", data, 0)
+          if magic == 0xFEEDFACF:
+              pos = 32
+              min_sect_off = len(data)
+              for _ in range(ncmds):
+                  cmd, cmdsize = struct.unpack_from("<II", data, pos)
+                  if cmd == 0x19:
+                      nsects = struct.unpack_from("<I", data, pos + 64)[0]
+                      sect_pos = pos + 72
+                      for _ in range(nsects):
+                          sect_off = struct.unpack_from("<I", data, sect_pos + 48)[0]
+                          if 0 < sect_off < min_sect_off:
+                              min_sect_off = sect_off
+                          sect_pos += 80
+                  pos += cmdsize
+
+              new_cmdsize = (24 + len(dylib_bytes) + 7) & ~7
+              header_end = 32 + sizeofcmds
+              if header_end + new_cmdsize <= min_sect_off:
+                  padded_name = dylib_bytes.ljust(new_cmdsize - 24, b"\x00")
+                  cmd_blob = struct.pack("<IIIIII", 0x80000018, new_cmdsize, 24, 2, 0x00010000, 0x00010000) + padded_name
+                  data[header_end : header_end + new_cmdsize] = cmd_blob
+                  struct.pack_into("<II", data, 16, ncmds + 1, sizeofcmds + new_cmdsize)
+                  with open(bin_path, "wb") as f:
+                      f.write(data)
+                  print(f"Successfully injected {sys.argv[2]} ({new_cmdsize}B, free pad was {min_sect_off - header_end}B)")
+              else:
+                  print(f"Note: Tight Mach-O header ({min_sect_off - header_end}B free); skipping dylib load command")
+          PY
+
+          ldid -Smerged_entitlements.plist "$MAIN_BIN"
+          otool -L "$MAIN_BIN"
+
+          cd work_ipa
+          zip -qry ../AetherWin-Madeira-iPhone13.ipa Payload
+          cd ..
+          ls -lh AetherWin-Madeira-iPhone13.ipa
+
+      - name: Upload Full Madeira-Engine iPhone 13 IPA
         uses: actions/upload-artifact@v4
         with:
-          name: AetherWin-iPhone13-IPA
-          path: AetherWin-iPhone13-Release.ipa
+          name: AetherWin-Madeira-iPhone13-IPA
+          path: AetherWin-Madeira-iPhone13.ipa
