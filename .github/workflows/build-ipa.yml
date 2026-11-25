@@ -1,0 +1,43 @@
+name: Build Signed AetherWin iOS IPA (iPhone 13 Optimized)
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build-ios-ipa:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout AetherWin Source
+        uses: actions/checkout@v4
+
+      - name: Install ldid Entitlement Signer
+        run: brew install ldid
+
+      - name: Compile Release ARM64 Bundle with Xcode
+        run: |
+          xcodebuild clean build \
+            -project AetherWin.xcodeproj \
+            -target AetherWin \
+            -configuration Release \
+            -sdk iphoneos \
+            SYMROOT="$PWD/build" \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGN_ENTITLEMENTS=""
+
+      - name: Inject 3.0GB Extended RAM & JIT Entitlements + Package IPA
+        run: |
+          APP_PATH=$(find build -name "AetherWin.app" -type d | head -n 1)
+          mkdir -p Payload
+          cp -R "$APP_PATH" Payload/AetherWin.app
+          ldid -SAetherWin/App/AetherWin.entitlements Payload/AetherWin.app/AetherWin
+          zip -r9 AetherWin-iPhone13-Release.ipa Payload
+
+      - name: Upload AetherWin IPA Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AetherWin-iPhone13-IPA
+          path: AetherWin-iPhone13-Release.ipa
