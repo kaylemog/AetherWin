@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Unlocks ~2.85GB - 3.0GB physical RAM limit on iPhone 13 (4GB device) to prevent Jetsam OOM kills -->
+    <key>com.apple.developer.kernel.increased-memory-limit</key>
+    <true/>
+    <!-- Unlocks full 64-bit virtual address space required by Wine64, WOW64 (32-bit games), and Unity IL2CPP/Mono heaps -->
+    <key>com.apple.developer.kernel.extended-virtual-addressing</key>
+    <true/>
+    <!-- Enables JIT dynamic recompilation when signed with Developer ID, AltStore/SideStore, or TrollStore -->
+    <key>get-task-allow</key>
+    <true/>
+    <key>dynamic-codesigning</key>
+    <true/>
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+</dict>
+</plist>
