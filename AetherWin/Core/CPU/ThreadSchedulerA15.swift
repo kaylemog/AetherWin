@@ -44,8 +44,6 @@ enum ThreadSchedulerA15 {
             setMachThreadPrecedence(importance: 55)
 
         case .asyncShaderCompile, .wineserverAndIO:
-            // Keep background compilation & disk swap strictly on Blizzard E-Cores!
-            // Prevents thermal throttling of the 2 Avalanche P-Cores during long My Summer Car sessions.
             pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, -10)
             setMachThreadPrecedence(importance: 15)
         }
@@ -60,7 +58,7 @@ enum ThreadSchedulerA15 {
             ptr.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { intPtr in
                 thread_policy_set(
                     mach_thread_self(),
-                    thread_policy_t(THREAD_PRECEDENCE_POLICY),
+                    thread_policy_flavor_t(THREAD_PRECEDENCE_POLICY),
                     intPtr,
                     count
                 )
